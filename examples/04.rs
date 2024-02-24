@@ -1,3 +1,4 @@
+use meos::TPointBuf;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::error::Error;
@@ -24,52 +25,63 @@ struct TripRecord {
     trip: *mut TSequence,
 }
 
-const NO_INSTANTS_BATCH: i32 = 1000;
+impl Drop for TripRecord {
+    fn drop(&mut self) {
+        unsafe {
+            free(self.trip.cast());
+        }
+    }
+}
+
+// Number of instants to send in batch to the file
+// DO NOT OVERFLOW
+const INSTANTS_BATCH_SIZE: i32 = 100;
+
+// Number of instants to keep when restarting a sequence
+const INSTANT_KEEP_COUNT: i32 = 2;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    unsafe {
-        meos_initialize(null_mut(), None);
-    }
-    let file = File::open("tests/data/ais_instants.csv")?;
+    meos::init();
+
+    let file = File::open("tests/data/ais_instants_med.csv")?;
     let mut rdr = csv::Reader::from_reader(file);
 
     let mut i = 0;
     let mut trips: HashMap<i64, TripRecord> = HashMap::new();
     for result in rdr.deserialize() {
-        print!("{i} [");
+        //print!("{i} [");
         i += 1;
         let record: AisRecord = result?;
         let mmsi = record.mmsi;
-        let t_ptr = CString::new(record.t)?;
-        let ts = unsafe { pg_timestamp_in(t_ptr.as_ptr(), -1) };
 
         unsafe {
-            let t_out = pg_timestamp_out(ts);
-            let t_out = CString::from_raw(t_out);
-            let point_buffer = format!(
-                "SRID=4326;Point({} {})@{}+00",
-                record.longitude,
-                record.latitude,
-                t_out.to_str()?
-            );
-            print!("{mmsi} - {point_buffer}");
-            let gp_ptr = CString::new(point_buffer)?;
+            let pb = TPointBuf::new(record.latitude, record.longitude, record.t, 4326);
+
+            //print!("{mmsi} - {point_buffer}");
+            let gp_ptr = CString::new(pb.formatted()?)?;
             match trips.entry(record.mmsi) {
-                Entry::Occupied(t) => {
-                    let r = t.get();
-                    let inst = tgeompoint_in(gp_ptr.as_ptr());
-                    if !inst.is_null() && !r.trip.is_null() {
-                        tsequence_append_tinstant(
-                            r.trip,
-                            inst as *mut TInstant,
-                            0.0,
-                            null_mut(),
-                            true,
-                        );
-                        print!(".");
-                    } else {
-                        print!("x")
+                Entry::Occupied(mut t) => {
+                    let mut r = t.get_mut();
+                    if (*r.trip).count == INSTANTS_BATCH_SIZE {
+                        // let temp = tsequence_out(r.trip, INSTANTS_BATCH_SIZE);
+                        // let temp = CString::from_raw(temp);
+                        // //println!("{mmsi} {}", temp.to_str()?);
+                        print!("{i},");
+                        tsequence_restart(r.trip, INSTANT_KEEP_COUNT);
                     }
+
+                    let inst = tgeompoint_in(gp_ptr.as_ptr());
+                    let prev = r.trip;
+                    r.trip = tsequence_append_tinstant(
+                        r.trip,
+                        inst as *mut TInstant,
+                        0.0,
+                        null_mut(),
+                        true,
+                    )
+                    .cast();
+                    free(inst.cast());
+                    //free(prev.cast());
                 }
                 Entry::Vacant(t) => {
                     //  TInstant *inst = (TInstant *) tgeogpoint_in(point_buffer);
@@ -79,24 +91,41 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let trip = tsequence_make_exp(
                         arr.as_ptr() as *mut *const TInstant,
                         1,
-                        NO_INSTANTS_BATCH * 1000,
+                        INSTANTS_BATCH_SIZE,
                         true,
                         true,
                         interpType_LINEAR,
                         false,
                     );
 
-                    let r = TripRecord { mmsi, trip };
-                    tsequence_append_tinstant(trip, inst as *mut TInstant, 0.0, null_mut(), true);
+                    let ttrip = tsequence_append_tinstant(
+                        trip,
+                        inst as *mut TInstant,
+                        0.0,
+                        null_mut(),
+                        true,
+                    );
+                    // todo;; --fixed-- leak
+                    free(trip.cast());
+                    free(inst.cast());
+                    let r = TripRecord {
+                        mmsi,
+                        trip: ttrip.cast(),
+                    };
 
                     t.insert(r);
                 }
             }
         }
-        println!("]");
+        //println!("]");
     }
 
     println!("Total trips: {}", trips.len());
+
+    unsafe {
+        meos_finalize();
+    }
+    println!("FINALIZED");
 
     Ok(())
 }
