@@ -17,12 +17,7 @@ fn main() {
 
     let bindings = bindgen::Builder::default()
         .header("mobdb/include/meos.h")
-        //
-        .allowlist_function("meos_initialize")
-        .allowlist_type("Temporal")
-        .allowlist_function("tgeompoint_in")
-        .allowlist_function("temporal_as_mfjson")
-        //
+        .header("mobdb/include/meos_internal.h")
         .generate()
         .expect("Unable to generate bindings");
 
