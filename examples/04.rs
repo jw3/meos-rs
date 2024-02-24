@@ -49,29 +49,27 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut i = 0;
     let mut trips: HashMap<i64, TripRecord> = HashMap::new();
     for result in rdr.deserialize() {
-        //print!("{i} [");
         i += 1;
         let record: AisRecord = result?;
         let mmsi = record.mmsi;
 
         unsafe {
+            // todo;; need some kind of geom representation, geom -> temporal
             let pb = TPointBuf::new(record.latitude, record.longitude, record.t, 4326);
 
-            //print!("{mmsi} - {point_buffer}");
+            // todo;; this is replacd by TPoint
             let gp_ptr = CString::new(pb.formatted()?)?;
+            let inst = tgeompoint_in(gp_ptr.as_ptr());
             match trips.entry(record.mmsi) {
                 Entry::Occupied(mut t) => {
                     let mut r = t.get_mut();
                     if (*r.trip).count == INSTANTS_BATCH_SIZE {
-                        // let temp = tsequence_out(r.trip, INSTANTS_BATCH_SIZE);
-                        // let temp = CString::from_raw(temp);
-                        // //println!("{mmsi} {}", temp.to_str()?);
-                        print!("{i},");
+                        print!("[{i}]{mmsi},");
                         tsequence_restart(r.trip, INSTANT_KEEP_COUNT);
                     }
 
-                    let inst = tgeompoint_in(gp_ptr.as_ptr());
-                    let prev = r.trip;
+                    // todo;; append needs done by a wrapper that frees the underlying mem
+                    //        trip.append(inst, maxd, madt, expand)
                     r.trip = tsequence_append_tinstant(
                         r.trip,
                         inst as *mut TInstant,
@@ -80,14 +78,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                         true,
                     )
                     .cast();
-                    free(inst.cast());
-                    //free(prev.cast());
                 }
                 Entry::Vacant(t) => {
-                    //  TInstant *inst = (TInstant *) tgeogpoint_in(point_buffer);
-                    let inst = tgeompoint_in(gp_ptr.as_ptr());
-
                     let arr = [inst];
+                    // todo;; needs to create a wrapper
+                    //        Trip::new(inst_arr, cnt, max_size, ....)
                     let trip = tsequence_make_exp(
                         arr.as_ptr() as *mut *const TInstant,
                         1,
@@ -98,31 +93,23 @@ fn main() -> Result<(), Box<dyn Error>> {
                         false,
                     );
 
-                    let ttrip = tsequence_append_tinstant(
-                        trip,
-                        inst as *mut TInstant,
-                        0.0,
-                        null_mut(),
-                        true,
-                    );
-                    // todo;; --fixed-- leak
-                    free(trip.cast());
-                    free(inst.cast());
                     let r = TripRecord {
                         mmsi,
-                        trip: ttrip.cast(),
+                        trip: trip.cast(),
                     };
 
                     t.insert(r);
                 }
             }
+            // todo;; --fixed-- leak
+            free(inst.cast());
         }
-        //println!("]");
     }
 
     println!("Total trips: {}", trips.len());
 
     unsafe {
+        // todo;; --fixed-- leak
         meos_finalize();
     }
     println!("FINALIZED");
