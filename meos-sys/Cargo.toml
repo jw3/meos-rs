@@ -7,3 +7,4 @@ edition = "2021"
 bindgen = "0.69"
 
 [dependencies]
+libc = "0.2"

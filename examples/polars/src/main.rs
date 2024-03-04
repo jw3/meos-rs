@@ -1,22 +1,8 @@
 use deadpool_postgres::{Config, ManagerConfig, RecyclingMethod, Runtime};
 use meos::*;
-use polars::io::mmap::MmapBytesReader;
 use polars::prelude::*;
 use std::error::Error;
-use std::ffi::{CStr, CString};
-use std::fmt::format;
-use std::ptr::null_mut;
-use std::str::Utf8Error;
-use tokio_postgres::types::Type;
 use tokio_postgres::{Client, NoTls};
-
-use meos_sys::{
-    free, interpType_LINEAR, pg_timestamp_in, pg_timestamp_out, tgeompoint_in,
-    tsequence_append_tinstant, tsequence_make, tsequence_make_exp, tsequence_out,
-    tsequence_restart, TInstant, TSequence, Temporal,
-};
-
-type Posit = TGeom;
 
 async fn create_trip_table(client: &Client) -> Result<(), tokio_postgres::Error> {
     //print!("+");
@@ -33,7 +19,6 @@ async fn create_trip_table(client: &Client) -> Result<(), tokio_postgres::Error>
 }
 
 const INSTANTS_BATCH_SIZE: usize = 100;
-const INSTANT_KEEP_COUNT: i32 = 2;
 
 async fn insert_trip(client: &Client, mmsi: i32, trip: &str) -> Result<u64, tokio_postgres::Error> {
     let q = format!("INSERT INTO ais.trips (MMSI, trip) VALUES ({mmsi}, '{trip}') ON CONFLICT (MMSI) DO UPDATE SET trip = public.update(trips.trip, EXCLUDED.trip, true)");
@@ -75,6 +60,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .select([col("MMSI"), col("T"), col("LAT"), col("LON")])
         .group_by(["MMSI"])
         .agg([
+            // todo;; figure out how to remove dupes in df, the
+            //        trick is deriving the correct len afterwards
             len(),
             col("T").sort(false),
             concat_str([col("LON"), col("LAT")], " ", true).alias("P"),
@@ -85,9 +72,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let sz = df.height();
     if sz > 0 {
-        let insert_statement = {
+        let _insert_statement = {
             let client = pool.get().await?;
             create_trip_table(&client).await?;
+            // todo;; need to go from tgeopoint to a byte array for the prepared statement
             // let statement =
             //     "INSERT INTO ais.trips (MMSI, trip) VALUES ($1, $2) ON CONFLICT (MMSI) DO UPDATE SET trip = public.update(trips.trip, EXCLUDED.trip, true)";
             // client.prepare(&statement).await.expect("prepare")
@@ -99,47 +87,36 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     (Int64(mmsi), UInt32(len), List(ts), List(pt)) => {
                         println!("========== {i}: {mmsi} - {len} ==========");
 
-                        let t = ts.get(0)?;
-                        let p = pt.get(0)?;
-                        let posit = make_posit(t.get_str().unwrap(), p.get_str().unwrap());
+                        let source: Vec<_> = (0..len as usize)
+                            .into_iter()
+                            .map(|i| (ts.get(i).unwrap(), pt.get(i).unwrap()))
+                            .collect();
 
-                        unsafe {
-                            let source: Vec<_> = (0..len as usize)
-                                .into_iter()
-                                .map(|i| (ts.get(i).unwrap(), pt.get(i).unwrap()))
-                                .collect();
+                        for chunk in source.chunks(INSTANTS_BATCH_SIZE) {
+                            let mut trip = vec![];
 
-                            for chunk in source.chunks(INSTANTS_BATCH_SIZE) {
-                                let mut trip = vec![];
-
-                                for (t, p) in chunk {
-                                    // todo;; figure out how to remove dupes in df, the
-                                    //        trick is deriving the correct len afterwards
-                                    let ts = t.get_str().unwrap();
-                                    if trip.last().is_some_and(|(pts, _)| pts == ts) {
-                                        continue;
-                                    }
-
-                                    // println!("\t {i}: Point({p})@{t}+00");
-                                    print!(".");
-                                    trip.push((
-                                        ts.to_string(),
-                                        make_posit(ts, p.get_str().unwrap()),
-                                    ));
+                            for (t, p) in chunk {
+                                // todo;; remove dupes in df and this check goes away
+                                let ts = t.get_str().unwrap();
+                                if trip.last().is_some_and(|(pts, _)| pts == ts) {
+                                    continue;
                                 }
 
-                                // todo;; figure out how to remove dupes in df, and this map goes away
-                                let seq = TSeq::make(trip.into_iter().map(|(_, g)| g).collect());
-                                let q_str = seq.out()?;
-
-                                // todo;; write q_str;
-                                let client = pool.get().await?;
-                                // client
-                                //     .execute(&insert_statement, &[&(mmsi as i32), &q_str])
-                                //     .await?;
-                                insert_trip(&client, mmsi as i32, &q_str).await?;
-                                println!(";")
+                                // println!("\t {i}: Point({p})@{t}+00");
+                                print!(".");
+                                trip.push((ts.to_string(), make_posit(ts, p.get_str().unwrap())));
                             }
+
+                            // todo;; remove dupes in df, and this map goes away
+                            let seq = TSeq::make(trip.into_iter().map(|(_, g)| g).collect());
+                            let q_str = seq.out()?;
+
+                            let client = pool.get().await?;
+                            // client
+                            //     .execute(&insert_statement, &[&(mmsi as i32), &q_str])
+                            //     .await?;
+                            insert_trip(&client, mmsi as i32, &q_str).await?;
+                            println!(";")
                         }
                     }
                     x => {
@@ -152,6 +129,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         unreachable!("col mismatch")
     }
 
+    meos::finalize();
     Ok(())
 }
 

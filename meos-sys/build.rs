@@ -16,8 +16,8 @@ fn main() {
     println!("cargo:rustc-link-lib=dylib=tiff");
 
     let bindings = bindgen::Builder::default()
-        .header("mobdb/include/meos.h")
-        .header("mobdb/include/meos_internal.h")
+        .header("wrapper.h")
+        .blocklist_file("mobdb/include/meos_internal.h")
         .generate()
         .expect("Unable to generate bindings");
 

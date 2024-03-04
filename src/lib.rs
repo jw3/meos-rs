@@ -1,15 +1,67 @@
-use meos_sys;
-use meos_sys::{
-    free, meos_initialize, pg_timestamp_in, pg_timestamp_out, tgeompoint_in, TSequence, Temporal,
-};
+use libc::free;
+use meos_sys as ffi;
 use std::error::Error;
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
+use std::fmt::{Display, Formatter};
 use std::ptr::null_mut;
-use std::time::Instant;
+use std::str::Utf8Error;
 
 pub fn init() {
     unsafe {
-        meos_initialize(null_mut(), None);
+        ffi::meos_initialize(null_mut(), None);
+    }
+}
+
+pub fn finalize() {
+    unsafe {
+        ffi::meos_finalize();
+    }
+}
+pub type TGeomPtr = *mut ffi::Temporal;
+pub struct TGeom {
+    pub ptr: *mut ffi::Temporal,
+}
+
+impl TGeom {
+    /// format: wkt-point@wkt-time
+    pub fn new(wkt: &str) -> Result<Self, ()> {
+        let ptr = unsafe {
+            let cstr = CString::new(wkt).map_err(|_| ())?;
+            let ptr = ffi::tgeompoint_in(cstr.as_ptr());
+            if ptr.is_null() {
+                return Err(());
+            }
+            ptr
+        };
+        Ok(TGeom { ptr })
+    }
+
+    pub fn make(lat: f64, lon: f64, t: String, srid: u32) -> Result<String, Box<dyn Error>> {
+        unsafe {
+            let t_ptr = CString::new(t.clone())?;
+            let ts = ffi::pg_timestamp_in(t_ptr.as_ptr(), -1);
+            let t_out = ffi::pg_timestamp_out(ts);
+            let t_str = CString::from_raw(t_out);
+            Ok(format!(
+                "SRID={};Point({} {})@{}+00",
+                srid,
+                lon,
+                lat,
+                t_str.to_str()?
+            ))
+        }
+    }
+
+    pub fn ttype(&self) -> TemporalSubtype {
+        let mt: ffi::tempSubtype = unsafe { (*self.ptr).subtype.into() };
+        TemporalSubtype::from(mt)
+    }
+}
+impl Drop for TGeom {
+    fn drop(&mut self) {
+        unsafe {
+            free(self.ptr.cast());
+        }
     }
 }
 
@@ -28,11 +80,12 @@ impl TPointBuf {
     pub fn formatted(&self) -> Result<String, Box<dyn Error>> {
         unsafe {
             let t_ptr = CString::new(self.t.clone())?;
-            let ts = unsafe { pg_timestamp_in(t_ptr.as_ptr(), -1) };
-            let t_out = pg_timestamp_out(ts);
+            let ts = ffi::pg_timestamp_in(t_ptr.as_ptr(), -1);
+            let t_out = ffi::pg_timestamp_out(ts);
             let t_str = CString::from_raw(t_out);
             Ok(format!(
-                "SRID=4326;Point({} {})@{}+00",
+                "SRID={};Point({} {})@{}+00",
+                self.srid,
                 self.lon,
                 self.lat,
                 t_str.to_str()?
@@ -41,22 +94,101 @@ impl TPointBuf {
     }
 }
 
-struct TPoint {
-    p: *mut Temporal,
+// struct TPoint {
+//     p: *mut ffi::Temporal,
+// }
+//
+// impl TPoint {
+//     pub fn make(pb: String) -> Self {
+//         let pb_ptr = CString::new(pb).expect("CString");
+//         unsafe {
+//             let p = ffi::tgeompoint_in(pb_ptr.as_ptr());
+//             Self { p }
+//         }
+//     }
+// }
+//
+// impl Drop for TPoint {
+//     fn drop(&mut self) {
+//         unsafe { free(self.p.cast()) }
+//     }
+// }
+
+pub fn to_mf_json(t: &TGeom) -> Result<String, Box<dyn Error>> {
+    unsafe {
+        let p = ffi::temporal_as_mfjson(t.ptr, true, 0, 6, null_mut());
+        let cstr = CStr::from_ptr(p);
+        let cstring = CString::new(cstr.to_bytes())?.into_string()?;
+        free(p.cast());
+        Ok(cstring)
+    }
 }
 
-impl TPoint {
-    pub fn make(pb: String) -> Self {
-        let pb_ptr = CString::new(pb).expect("CString");
+pub struct TSeq {
+    pub p: *mut ffi::TSequence,
+}
+
+impl TSeq {
+    pub fn make(gs: Vec<TGeom>) -> Self {
+        let v: Vec<TGeomPtr> = gs.iter().map(|g| g.ptr).collect();
+        let arr = v.as_slice();
+        let p = unsafe {
+            ffi::tsequence_make(
+                arr.as_ptr() as *mut *const ffi::TInstant,
+                arr.len().try_into().unwrap(),
+                true,
+                true,
+                ffi::interpType_LINEAR,
+                false,
+            )
+        };
+        TSeq { p }
+    }
+
+    pub fn out(&self) -> Result<String, Utf8Error> {
         unsafe {
-            let p = tgeompoint_in(pb_ptr.as_ptr());
-            Self { p }
+            let temp_out = ffi::tsequence_out(self.p, 15);
+            let x = CString::from_raw(temp_out);
+            x.to_str().map(|x| x.to_owned())
         }
     }
 }
 
-impl Drop for TPoint {
+impl Drop for TSeq {
     fn drop(&mut self) {
         unsafe { free(self.p.cast()) }
+    }
+}
+
+#[derive(Copy, Clone)]
+pub enum TemporalSubtype {
+    TAny,
+    TInstant,
+    TSequence,
+    TSequenceSet,
+}
+
+impl From<ffi::tempSubtype> for TemporalSubtype {
+    fn from(value: ffi::tempSubtype) -> Self {
+        use TemporalSubtype::*;
+        match value {
+            ffi::tempSubtype_ANYTEMPSUBTYPE => TAny,
+            ffi::tempSubtype_TINSTANT => TInstant,
+            ffi::tempSubtype_TSEQUENCE => TSequence,
+            ffi::tempSubtype_TSEQUENCESET => TSequenceSet,
+            _ => unreachable!("invalid tempSubtype"),
+        }
+    }
+}
+
+impl Display for TemporalSubtype {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        use TemporalSubtype::*;
+        f.write_str(match self {
+            TAny => "Any",
+            TInstant => "Instant",
+            TSequence => "Sequence",
+            TSequenceSet => "SequenceSet",
+        })
     }
 }
