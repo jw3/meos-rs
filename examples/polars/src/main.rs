@@ -1,31 +1,22 @@
 use deadpool_postgres::{Config, ManagerConfig, RecyclingMethod, Runtime};
-use meos::TPointBuf;
+use meos::*;
 use polars::io::mmap::MmapBytesReader;
 use polars::prelude::*;
 use std::error::Error;
 use std::ffi::{CStr, CString};
 use std::fmt::format;
 use std::ptr::null_mut;
+use std::str::Utf8Error;
 use tokio_postgres::types::Type;
 use tokio_postgres::{Client, NoTls};
 
 use meos_sys::{
     free, interpType_LINEAR, pg_timestamp_in, pg_timestamp_out, tgeompoint_in,
-    tsequence_append_tinstant, tsequence_make_exp, tsequence_out, tsequence_restart, TInstant,
-    TSequence, Temporal,
+    tsequence_append_tinstant, tsequence_make, tsequence_make_exp, tsequence_out,
+    tsequence_restart, TInstant, TSequence, Temporal,
 };
 
-struct Posit {
-    ptr: *mut Temporal,
-}
-
-impl Drop for Posit {
-    fn drop(&mut self) {
-        unsafe {
-            free(self.ptr.cast());
-        }
-    }
-}
+type Posit = TGeom;
 
 async fn create_trip_table(client: &Client) -> Result<(), tokio_postgres::Error> {
     //print!("+");
@@ -41,7 +32,7 @@ async fn create_trip_table(client: &Client) -> Result<(), tokio_postgres::Error>
         .await
 }
 
-const INSTANTS_BATCH_SIZE: i32 = 100;
+const INSTANTS_BATCH_SIZE: usize = 100;
 const INSTANT_KEEP_COUNT: i32 = 2;
 
 async fn insert_trip(client: &Client, mmsi: i32, trip: &str) -> Result<u64, tokio_postgres::Error> {
@@ -110,80 +101,45 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                         let t = ts.get(0)?;
                         let p = pt.get(0)?;
-                        let posit = make_posit(t.get_str().unwrap(), p.get_str().unwrap())?;
+                        let posit = make_posit(t.get_str().unwrap(), p.get_str().unwrap());
 
                         unsafe {
-                            let arr = [posit.ptr];
-                            let mut trip = unsafe {
-                                tsequence_make_exp(
-                                    arr.as_ptr() as *mut *const TInstant,
-                                    1,
-                                    INSTANTS_BATCH_SIZE,
-                                    true,
-                                    true,
-                                    interpType_LINEAR,
-                                    false,
-                                )
-                            };
+                            let source: Vec<_> = (0..len as usize)
+                                .into_iter()
+                                .map(|i| (ts.get(i).unwrap(), pt.get(i).unwrap()))
+                                .collect();
 
-                            for i in 1..len as usize {
-                                let t = ts.get(i)?;
-                                let p = pt.get(i)?;
+                            for chunk in source.chunks(INSTANTS_BATCH_SIZE) {
+                                let mut trip = vec![];
 
-                                // todo;; figure out how to remove dupes in df, the
-                                //        trick is deriving the correct len afterwards
-                                if t == ts.get(i - 1)? {
-                                    continue;
+                                for (t, p) in chunk {
+                                    // todo;; figure out how to remove dupes in df, the
+                                    //        trick is deriving the correct len afterwards
+                                    let ts = t.get_str().unwrap();
+                                    if trip.last().is_some_and(|(pts, _)| pts == ts) {
+                                        continue;
+                                    }
+
+                                    // println!("\t {i}: Point({p})@{t}+00");
+                                    print!(".");
+                                    trip.push((
+                                        ts.to_string(),
+                                        make_posit(ts, p.get_str().unwrap()),
+                                    ));
                                 }
 
-                                // println!("\t {i}: Point({p})@{t}+00");
-                                print!(".");
+                                // todo;; figure out how to remove dupes in df, and this map goes away
+                                let seq = TSeq::make(trip.into_iter().map(|(_, g)| g).collect());
+                                let q_str = seq.out()?;
 
-                                let posit = make_posit(t.get_str().unwrap(), p.get_str().unwrap())?;
-
-                                if (*trip).count == INSTANTS_BATCH_SIZE {
-                                    let temp_out = tsequence_out(trip, 15);
-                                    let q_str = CString::from_raw(temp_out)
-                                        .to_str()
-                                        .expect("temp out qstr")
-                                        .to_owned();
-
-                                    // todo;; write q_str;
-                                    let client = pool.get().await?;
-                                    // client
-                                    //     .execute(&insert_statement, &[&(mmsi as i32), &q_str])
-                                    //     .await?;
-                                    insert_trip(&client, mmsi as i32, &q_str)
-                                        .await
-                                        .expect("insert trip");
-
-                                    tsequence_restart(trip, INSTANT_KEEP_COUNT);
-                                    print!("+");
-                                }
-
-                                trip = tsequence_append_tinstant(
-                                    trip,
-                                    posit.ptr as *mut TInstant,
-                                    0.0,
-                                    null_mut(),
-                                    true,
-                                )
-                                .cast();
+                                // todo;; write q_str;
+                                let client = pool.get().await?;
+                                // client
+                                //     .execute(&insert_statement, &[&(mmsi as i32), &q_str])
+                                //     .await?;
+                                insert_trip(&client, mmsi as i32, &q_str).await?;
+                                println!(";")
                             }
-
-                            let temp_out = tsequence_out(trip, 15);
-                            let q_str = CString::from_raw(temp_out)
-                                .to_str()
-                                .expect("temp out qstr")
-                                .to_owned();
-
-                            // todo;; write q_str;
-                            let client = pool.get().await?;
-                            // client
-                            //     .execute(&insert_statement, &[&(mmsi as i32), &q_str])
-                            //     .await?;
-                            insert_trip(&client, mmsi as i32, &q_str).await?;
-                            println!(";")
                         }
                     }
                     x => {
@@ -199,17 +155,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn make_posit(t: &str, p: &str) -> Result<Posit, Box<dyn Error>> {
-    unsafe {
-        let t_ptr = CString::new(t)?;
-        let ts = pg_timestamp_in(t_ptr.as_ptr(), -1);
-        let t_out = pg_timestamp_out(ts);
-        let t_str = CString::from_raw(t_out);
-        let formatted = format!("SRID=4326;Point({p})@{t}+00");
-        // println!("{formatted}");
-        let gp_ptr = CString::new(formatted)?;
-        Ok(Posit {
-            ptr: tgeompoint_in(gp_ptr.as_ptr()),
-        })
-    }
+fn make_posit(t: &str, p: &str) -> TGeom {
+    let wkt = format!("SRID=4326;Point({p})@{t}+00");
+    TGeom::new(&wkt).expect("")
 }
