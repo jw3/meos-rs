@@ -6,9 +6,9 @@ edition = "2021"
 [dependencies]
 meos-rs = { path = "../.." }
 meos-sys = { path = "../../meos-sys" }
-
-polars = { version = "x", features = ["lazy", "strings", "concat_str", "regex"]}
+clap = { version = "4", features = ["derive"] }
+polars = { version = "x", features = ["lazy", "strings", "concat_str", "regex"] }
 serde = { version = "1", features = ["derive"] }
-tokio = { version = "1", features = ["full"]}
+tokio = { version = "1", features = ["full"] }
 tokio-postgres = "0.7"
 deadpool-postgres = "0.12"

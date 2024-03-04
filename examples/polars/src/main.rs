@@ -1,7 +1,9 @@
+use clap::Parser;
 use deadpool_postgres::{Config, ManagerConfig, RecyclingMethod, Runtime};
 use meos::*;
 use polars::prelude::*;
 use std::error::Error;
+use std::time::Instant;
 use tokio_postgres::{Client, NoTls};
 
 async fn create_trip_table(client: &Client) -> Result<(), tokio_postgres::Error> {
@@ -25,33 +27,66 @@ async fn insert_trip(client: &Client, mmsi: i32, trip: &str) -> Result<u64, toki
     client.execute(&q, &[]).await
 }
 
+/// CSV to MobilityDB with Polars
+#[derive(Parser)]
+struct Opts {
+    /// Path to the input CSV file
+    csv: String,
+
+    /// Database name
+    #[clap(long, default_value = "postgres")]
+    db: Option<String>,
+    #[clap(long, default_value = "localhost")]
+    host: Option<String>,
+    #[clap(long, default_value = "5432")]
+    port: Option<u16>,
+    #[clap(short, long, default_value = "postgres")]
+    username: Option<String>,
+    #[clap(short, long, default_value = "postgres")]
+    password: Option<String>,
+
+    /// Maximum number of records to read from csv
+    #[clap(short, long, default_value = "10000")]
+    limit: u32,
+}
+
+impl From<Opts> for Config {
+    fn from(value: Opts) -> Self {
+        let mut cfg = Config::new();
+        cfg.host = value.host;
+        cfg.port = value.port;
+        cfg.dbname = value.db;
+        cfg.user = value.username;
+        cfg.password = value.password;
+        cfg.manager = Some(ManagerConfig {
+            recycling_method: RecyclingMethod::Fast,
+        });
+        cfg
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     meos::init();
 
-    let df = LazyCsvReader::new("/home/wassj/dev/data/AIS_2020_01_01.csv")
+    let opts: Opts = Opts::parse();
+
+    let start = Instant::now();
+    let df = LazyCsvReader::new(&opts.csv)
         .has_header(true)
-        .finish()?;
+        .finish()?
+        .limit(opts.limit);
+    let duration = start.elapsed();
+    println!("loaded csv in {:?}", duration);
 
-    let mut cfg = Config::new();
-    cfg.host = Some("localhost".to_string());
-    cfg.port = Some(5432);
+    let cfg: Config = opts.into();
 
-    // cfg.host = Some("compute-node.database.svc.cluster.local".to_string());
-    // cfg.port = Some(55433);
-
-    cfg.dbname = Some("ais".to_string());
-    cfg.user = Some("hippo".to_string());
-    cfg.password = Some("hippo".to_string());
-    cfg.manager = Some(ManagerConfig {
-        recycling_method: RecyclingMethod::Fast,
-    });
     let pool = cfg.create_pool(Some(Runtime::Tokio1), NoTls).unwrap();
     tokio::spawn({
         let pool = pool.clone();
         async move {
             if let Err(e) = pool.get().await {
-                eprintln!("connection error: {}", e);
+                eprintln!("db connection error: {}", e);
             }
         }
     });
