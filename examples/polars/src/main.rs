@@ -13,6 +13,7 @@ async fn create_trip_table(client: &Client) -> Result<(), tokio_postgres::Error>
     client
         .batch_execute(
             &[
+                "CREATE SCHEMA IF NOT EXISTS ais",
                 "SELECT pg_catalog.set_config('search_path', '', false)",
                 "DROP TABLE IF EXISTS ais.trips",
                 "CREATE TABLE ais.trips (MMSI integer PRIMARY KEY, trip public.tgeompoint)",
