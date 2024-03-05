@@ -10,7 +10,6 @@ use std::time::Instant;
 use tokio_postgres::{Client, NoTls};
 
 async fn create_trip_table(client: &Client) -> Result<(), tokio_postgres::Error> {
-    //print!("+");
     client
         .batch_execute(
             &[
@@ -21,11 +20,6 @@ async fn create_trip_table(client: &Client) -> Result<(), tokio_postgres::Error>
             .join(";"),
         )
         .await
-}
-
-async fn insert_trip(client: &Client, mmsi: i32, trip: &str) -> Result<u64, tokio_postgres::Error> {
-    let q = format!("INSERT INTO ais.trips (MMSI, trip) VALUES ({mmsi}, '{trip}') ON CONFLICT (MMSI) DO UPDATE SET trip = public.update(trips.trip, EXCLUDED.trip, true)");
-    client.execute(&q, &[]).await
 }
 
 /// Take AIS data from CSV to MobilityDB with Polars
@@ -131,9 +125,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let insert_statement = {
             let client = pool.get().await?;
             create_trip_table(&client).await?;
-            // todo;; need to go from tgeopoint to a byte array for the prepared statement
-            // use tgeompointFromHexEWKB to convert from byte array
-            // use temporal_to_wkb_buf(tptr, buff, WKB_NDR | (uint8_t) WKB_EXTENDED | (uint8_t) WKB_HEX) to go from temporal
             let statement =
                 "INSERT INTO ais.trips (MMSI, trip) VALUES ($1, public.tgeompointFromBinary($2)) ON CONFLICT (MMSI) DO UPDATE SET trip = public.update(trips.trip, EXCLUDED.trip, true)";
             client.prepare(&statement).await.expect("prepare")
@@ -141,7 +132,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         use AnyValue::*;
         if let [m, l, t, p] = df.get_columns() {
-            for i in 0..sz {
+            'df: for i in 0..sz {
                 let mut metric_trip_sz = 0;
                 match (m.get(i)?, l.get(i)?, t.get(i)?, p.get(i)?) {
                     (Int64(mmsi), UInt32(len), List(ts), List(pt)) => {
@@ -174,28 +165,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             if !trip.is_empty() {
                                 // todo;; remove dupes in df, and this map goes away
                                 let seq = TSeq::make(trip.into_iter().map(|(_, g)| g).collect());
-                                let q_str = seq.out()?;
 
                                 let mut szout: usize = 0;
                                 unsafe {
                                     let bytes = meos::temporal_as_wkb(
                                         seq.p as *const Temporal,
-                                        meos::MY_VARIANT,
+                                        meos::WKB_VARIANT,
                                         &mut szout,
                                     ) as *const u8;
-
                                     let arr = std::slice::from_raw_parts(bytes, szout);
 
-                                    //println!("CONVERTED! {} bytes arr {} ", szout, arr.len());
-
                                     let client = pool.get().await?;
-                                    client
+                                    match client
                                         .execute(&insert_statement, &[&(mmsi as i32), &arr])
-                                        .await?;
+                                        .await
+                                    {
+                                        Ok(_) => {}
+                                        Err(e) => {
+                                            eprintln!("\nerror: {e}");
+                                            break 'df;
+                                        }
+                                    }
                                 }
-
-                                // insert_trip(&client, mmsi as i32, &q_str).await?;
-                                // println!(";")
                             }
                         }
                         metric_mmsi_cnt += 1;
