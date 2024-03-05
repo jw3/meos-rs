@@ -4,3 +4,6 @@
 
 mod bindings;
 pub use bindings::*;
+
+pub use bindings::temporal_as_hexwkb;
+pub use bindings::{WKB_EXTENDED, WKB_HEX, WKB_NDR};

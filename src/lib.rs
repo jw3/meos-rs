@@ -6,6 +6,10 @@ use std::fmt::{Display, Formatter};
 use std::ptr::null_mut;
 use std::str::Utf8Error;
 
+pub use ffi::{temporal_as_hexwkb, temporal_as_wkb, WKB_EXTENDED, WKB_HEX, WKB_NDR, WKB_XDR};
+
+pub const MY_VARIANT: u8 = 0u8 | WKB_NDR as u8 | WKB_EXTENDED as u8  /* | WKB_HEX*/;
+
 pub fn init() {
     unsafe {
         ffi::meos_initialize(null_mut(), None);

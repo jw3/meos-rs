@@ -1,8 +1,11 @@
 use clap::Parser;
 use deadpool_postgres::{Config, ManagerConfig, RecyclingMethod, Runtime};
 use meos::*;
+use meos_sys::Temporal;
 use polars::prelude::*;
 use std::error::Error;
+use std::io;
+use std::io::Write;
 use std::time::Instant;
 use tokio_postgres::{Client, NoTls};
 
@@ -13,14 +16,12 @@ async fn create_trip_table(client: &Client) -> Result<(), tokio_postgres::Error>
             &[
                 "SELECT pg_catalog.set_config('search_path', '', false)",
                 "DROP TABLE IF EXISTS ais.trips",
-                "CREATE TABLE ais.trips (MMSI integer PRIMARY KEY, trip public.tgeogpoint)",
+                "CREATE TABLE ais.trips (MMSI integer PRIMARY KEY, trip public.tgeompoint)",
             ]
             .join(";"),
         )
         .await
 }
-
-const INSTANTS_BATCH_SIZE: usize = 100;
 
 async fn insert_trip(client: &Client, mmsi: i32, trip: &str) -> Result<u64, tokio_postgres::Error> {
     let q = format!("INSERT INTO ais.trips (MMSI, trip) VALUES ({mmsi}, '{trip}') ON CONFLICT (MMSI) DO UPDATE SET trip = public.update(trips.trip, EXCLUDED.trip, true)");
@@ -118,24 +119,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .filter(col("len").gt(lit(1)))
         .sort("len", Default::default())
         .collect()?;
+    let duration = start.elapsed();
+    println!("loaded {} in {:?}", &opts.csv, duration);
+
+    let mut metric_mmsi_cnt = 0;
+    let mut metric_total_posit_cnt = 0;
+    let mut metric_last_posit_report = 0;
 
     let sz = df.height();
     if sz > 0 {
-        let _insert_statement = {
+        let insert_statement = {
             let client = pool.get().await?;
             create_trip_table(&client).await?;
             // todo;; need to go from tgeopoint to a byte array for the prepared statement
-            // let statement =
-            //     "INSERT INTO ais.trips (MMSI, trip) VALUES ($1, $2) ON CONFLICT (MMSI) DO UPDATE SET trip = public.update(trips.trip, EXCLUDED.trip, true)";
-            // client.prepare(&statement).await.expect("prepare")
+            // use tgeompointFromHexEWKB to convert from byte array
+            // use temporal_to_wkb_buf(tptr, buff, WKB_NDR | (uint8_t) WKB_EXTENDED | (uint8_t) WKB_HEX) to go from temporal
+            let statement =
+                "INSERT INTO ais.trips (MMSI, trip) VALUES ($1, public.tgeompointFromBinary($2)) ON CONFLICT (MMSI) DO UPDATE SET trip = public.update(trips.trip, EXCLUDED.trip, true)";
+            client.prepare(&statement).await.expect("prepare")
         };
+
         use AnyValue::*;
         if let [m, l, t, p] = df.get_columns() {
             for i in 0..sz {
+                let mut metric_trip_sz = 0;
                 match (m.get(i)?, l.get(i)?, t.get(i)?, p.get(i)?) {
                     (Int64(mmsi), UInt32(len), List(ts), List(pt)) => {
-                        println!("========== {i}: {mmsi} - {len} ==========");
-
+                        // println!("========== {i}: {mmsi} - {len} ==========");
                         let source: Vec<_> = (0..len as usize)
                             .into_iter()
                             .map(|i| (ts.get(i).unwrap(), pt.get(i).unwrap()))
@@ -150,22 +160,53 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 if trip.last().is_some_and(|(pts, _)| pts == ts) {
                                     continue;
                                 }
-
                                 // println!("\t {i}: Point({p})@{t}+00");
-                                print!(".");
+                                // print!(".");
                                 trip.push((ts.to_string(), make_posit(ts, p.get_str().unwrap())));
+
+                                metric_total_posit_cnt += 1;
+                                metric_trip_sz += 1;
+                                if opts.max_trip_size.is_some_and(|max| metric_trip_sz >= max) {
+                                    break;
+                                }
                             }
 
-                            // todo;; remove dupes in df, and this map goes away
-                            let seq = TSeq::make(trip.into_iter().map(|(_, g)| g).collect());
-                            let q_str = seq.out()?;
+                            if !trip.is_empty() {
+                                // todo;; remove dupes in df, and this map goes away
+                                let seq = TSeq::make(trip.into_iter().map(|(_, g)| g).collect());
+                                let q_str = seq.out()?;
 
-                            let client = pool.get().await?;
-                            // client
-                            //     .execute(&insert_statement, &[&(mmsi as i32), &q_str])
-                            //     .await?;
-                            insert_trip(&client, mmsi as i32, &q_str).await?;
-                            println!(";")
+                                let mut szout: usize = 0;
+                                unsafe {
+                                    let bytes = meos::temporal_as_wkb(
+                                        seq.p as *const Temporal,
+                                        meos::MY_VARIANT,
+                                        &mut szout,
+                                    ) as *const u8;
+
+                                    let arr = std::slice::from_raw_parts(bytes, szout);
+
+                                    //println!("CONVERTED! {} bytes arr {} ", szout, arr.len());
+
+                                    let client = pool.get().await?;
+                                    client
+                                        .execute(&insert_statement, &[&(mmsi as i32), &arr])
+                                        .await?;
+                                }
+
+                                // insert_trip(&client, mmsi as i32, &q_str).await?;
+                                // println!(";")
+                            }
+                        }
+                        metric_mmsi_cnt += 1;
+                        if metric_mmsi_cnt % 500 == 0 {
+                            print!(".");
+                            let _ = io::stdout().flush();
+                        }
+                        if metric_total_posit_cnt - metric_last_posit_report > 10000 {
+                            metric_last_posit_report = metric_total_posit_cnt;
+                            print!("+");
+                            let _ = io::stdout().flush();
                         }
                     }
                     x => {
@@ -177,6 +218,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     } else {
         unreachable!("col mismatch")
     }
+
+    let duration = start.elapsed();
+    println!(
+        "loaded {} posits across {} mmsi in {:?}",
+        metric_total_posit_cnt, metric_mmsi_cnt, duration
+    );
 
     meos::finalize();
     Ok(())
