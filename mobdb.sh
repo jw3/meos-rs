@@ -13,7 +13,7 @@ mobdb_build_dir="${mobdb_dir}/build"
 mkdir -p "${mobdb_dir}"
 
 if [[ ! -d ${mobdb_src_dir} ]]; then
-  git clone --depth=1 https://github.com/MobilityDB/MobilityDB.git "${mobdb_src_dir}"
+  git clone --depth=1 --branch v1.1.0rc2 https://github.com/MobilityDB/MobilityDB.git "${mobdb_src_dir}"
 fi
 
 if [[ ! -f ${mobdb_dir}/lib/libmeos.a ]]; then
