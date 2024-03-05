@@ -47,13 +47,18 @@ struct Opts {
     #[clap(short, long, default_value = "postgres")]
     password: Option<String>,
 
-    /// Maximum number of records to read from csv
+    /// Maximum number of vessls to read from csv
     #[clap(short, long)]
     limit: Option<u32>,
 
     #[clap(long, default_value = "50")]
     batch_size: usize,
 
+    /// filter out trips with less than
+    #[clap(long, default_value = "1")]
+    min_trip_size: u32,
+
+    /// truncate trips over
     #[clap(long)]
     max_trip_size: Option<usize>,
 }
@@ -91,10 +96,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
 
     let start = Instant::now();
-    let mut df = LazyCsvReader::new(&opts.csv).has_header(true).finish()?;
-    if let Some(limit) = opts.limit {
-        df = df.limit(limit);
-    }
+    let df = LazyCsvReader::new(&opts.csv).has_header(true).finish()?;
 
     let df = df
         .select([
@@ -111,8 +113,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             col("T").sort(false),
             concat_str([col("LON"), col("LAT")], " ", true).alias("P"),
         ])
-        .filter(col("len").gt(lit(1)))
+        .filter(col("len").gt(lit(opts.min_trip_size)))
         .sort("len", Default::default())
+        .limit(opts.limit.unwrap_or(IdxSize::MAX))
         .collect()?;
     let duration = start.elapsed();
     println!("loaded {} in {:?}", &opts.csv, duration);
