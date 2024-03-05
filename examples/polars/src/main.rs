@@ -27,8 +27,14 @@ async fn insert_trip(client: &Client, mmsi: i32, trip: &str) -> Result<u64, toki
     client.execute(&q, &[]).await
 }
 
-/// CSV to MobilityDB with Polars
-#[derive(Parser)]
+/// Take AIS data from CSV to MobilityDB with Polars
+///
+/// ## The program will show simplified output
+///
+/// - `.` represents 500 vessels processed
+///
+/// - `+` represents 10,000 posits processed
+#[derive(Clone, Debug, Parser)]
 struct Opts {
     /// Path to the input CSV file
     csv: String,
@@ -46,8 +52,14 @@ struct Opts {
     password: Option<String>,
 
     /// Maximum number of records to read from csv
-    #[clap(short, long, default_value = "10000")]
-    limit: u32,
+    #[clap(short, long)]
+    limit: Option<u32>,
+
+    #[clap(long, default_value = "50")]
+    batch_size: usize,
+
+    #[clap(long)]
+    max_trip_size: Option<usize>,
 }
 
 impl From<Opts> for Config {
@@ -71,16 +83,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let opts: Opts = Opts::parse();
 
-    let start = Instant::now();
-    let df = LazyCsvReader::new(&opts.csv)
-        .has_header(true)
-        .finish()?
-        .limit(opts.limit);
-    let duration = start.elapsed();
-    println!("loaded csv in {:?}", duration);
-
-    let cfg: Config = opts.into();
-
+    let cfg: Config = opts.clone().into();
     let pool = cfg.create_pool(Some(Runtime::Tokio1), NoTls).unwrap();
     tokio::spawn({
         let pool = pool.clone();
@@ -91,8 +94,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     });
 
+    let start = Instant::now();
+    let mut df = LazyCsvReader::new(&opts.csv).has_header(true).finish()?;
+    if let Some(limit) = opts.limit {
+        df = df.limit(limit);
+    }
+
     let df = df
-        .select([col("MMSI"), col("T"), col("LAT"), col("LON")])
+        .select([
+            col("MMSI"),
+            col("BaseDateTime").alias("T"),
+            col("LAT"),
+            col("LON"),
+        ])
         .group_by(["MMSI"])
         .agg([
             // todo;; figure out how to remove dupes in df, the
@@ -127,7 +141,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             .map(|i| (ts.get(i).unwrap(), pt.get(i).unwrap()))
                             .collect();
 
-                        for chunk in source.chunks(INSTANTS_BATCH_SIZE) {
+                        for chunk in source.chunks(opts.batch_size) {
                             let mut trip = vec![];
 
                             for (t, p) in chunk {
