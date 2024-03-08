@@ -96,6 +96,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let start = Instant::now();
     let df = LazyCsvReader::new(&opts.csv).has_header(true).finish()?;
+    let full_size = df.clone().collect().unwrap().height();
 
     let df = df
         .select([
@@ -117,13 +118,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .limit(opts.limit.unwrap_or(IdxSize::MAX))
         .collect()?;
     let duration = start.elapsed();
-    println!("loaded {} in {:?}", &opts.csv, duration);
+
+    let sz = df.height();
+    println!(
+        "loaded {} of {} records from {} in {:?}",
+        sz, full_size, &opts.csv, duration
+    );
+    let start = Instant::now();
 
     let mut metric_mmsi_cnt = 0;
     let mut metric_total_posit_cnt = 0;
     let mut metric_last_posit_report = 0;
 
-    let sz = df.height();
     if sz > 0 {
         let insert_statement = {
             let client = pool.get().await?;
@@ -206,8 +212,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let duration = start.elapsed();
     println!(
-        "loaded {} posits across {} mmsi in {:?}",
-        metric_total_posit_cnt, metric_mmsi_cnt, duration
+        "\ncommitted {} tracks containing {} posits in {:?}",
+        metric_mmsi_cnt, metric_total_posit_cnt, duration
     );
 
     meos::finalize();
