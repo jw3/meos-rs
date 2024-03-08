@@ -1,0 +1,35 @@
+{
+   pg_tzset-1
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   fun:pg_tzset
+   fun:meos_initialize_timezone
+   fun:meos_initialize
+   fun:_ZN4meos4init17h7d97d39f2508b92fE
+   fun:_ZN11_04_to_file4main17h2c61658b20ae86cfE
+   fun:_ZN4core3ops8function6FnOnce9call_once17h4aa76459cf1bc287E
+   fun:_ZN3std10sys_common9backtrace28__rust_begin_short_backtrace17hccf40b1cf8f4b985E
+   fun:_ZN3std2rt10lang_start28_$u7b$$u7b$closure$u7d$$u7d$17h6209b37a6cbfabaaE
+   fun:_ZN3std2rt19lang_start_internal17h6939038e2873596bE
+   fun:_ZN3std2rt10lang_start17h882cfb88a47f7c8fE
+   fun:main
+}
+
+{
+   pg_tzset-2
+   Memcheck:Leak
+   match-leak-kinds: definite
+   fun:malloc
+   fun:strdup
+   fun:pg_tzset
+   fun:meos_initialize_timezone
+   fun:meos_initialize
+   fun:_ZN4meos4init17h7d97d39f2508b92fE
+   fun:_ZN11_04_to_file4main17h2c61658b20ae86cfE
+   fun:_ZN4core3ops8function6FnOnce9call_once17h4aa76459cf1bc287E
+   fun:_ZN3std10sys_common9backtrace28__rust_begin_short_backtrace17hccf40b1cf8f4b985E
+   fun:_ZN3std2rt10lang_start28_$u7b$$u7b$closure$u7d$$u7d$17h6209b37a6cbfabaaE
+   fun:_ZN3std2rt19lang_start_internal17h6939038e2873596bE
+   fun:_ZN3std2rt10lang_start17h882cfb88a47f7c8fE
+}
