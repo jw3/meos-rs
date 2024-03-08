@@ -1,3 +1,4 @@
+use ffi::{Temporal, WKB_EXTENDED, WKB_NDR};
 use libc::free;
 use meos_sys as ffi;
 use std::error::Error;
@@ -5,8 +6,6 @@ use std::ffi::{CStr, CString};
 use std::fmt::{Display, Formatter};
 use std::ptr::null_mut;
 use std::str::Utf8Error;
-
-pub use ffi::{temporal_as_hexwkb, temporal_as_wkb, WKB_EXTENDED, WKB_HEX, WKB_NDR, WKB_XDR};
 
 pub const WKB_VARIANT: u8 = 0u8 | WKB_NDR as u8 | WKB_EXTENDED as u8  /* | WKB_HEX*/;
 
@@ -98,26 +97,6 @@ impl TPointBuf {
     }
 }
 
-// struct TPoint {
-//     p: *mut ffi::Temporal,
-// }
-//
-// impl TPoint {
-//     pub fn make(pb: String) -> Self {
-//         let pb_ptr = CString::new(pb).expect("CString");
-//         unsafe {
-//             let p = ffi::tgeompoint_in(pb_ptr.as_ptr());
-//             Self { p }
-//         }
-//     }
-// }
-//
-// impl Drop for TPoint {
-//     fn drop(&mut self) {
-//         unsafe { free(self.p.cast()) }
-//     }
-// }
-
 pub fn to_mf_json(t: &TGeom) -> Result<String, Box<dyn Error>> {
     unsafe {
         let p = ffi::temporal_as_mfjson(t.ptr, true, 0, 6, null_mut());
@@ -129,7 +108,7 @@ pub fn to_mf_json(t: &TGeom) -> Result<String, Box<dyn Error>> {
 }
 
 pub struct TSeq {
-    pub p: *mut ffi::TSequence,
+    p: *mut ffi::TSequence,
 }
 
 impl TSeq {
@@ -154,6 +133,16 @@ impl TSeq {
             let temp_out = ffi::tsequence_out(self.p, 15);
             let x = CString::from_raw(temp_out);
             x.to_str().map(|x| x.to_owned())
+        }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        let mut szout: usize = 0;
+        unsafe {
+            let bytes =
+                ffi::temporal_as_wkb(self.p as *const Temporal, crate::WKB_VARIANT, &mut szout)
+                    as *const u8;
+            std::slice::from_raw_parts(bytes, szout)
         }
     }
 }

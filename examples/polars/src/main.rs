@@ -1,7 +1,6 @@
 use clap::Parser;
 use deadpool_postgres::{Config, ManagerConfig, RecyclingMethod, Runtime};
 use meos::*;
-use meos_sys::Temporal;
 use polars::prelude::*;
 use std::error::Error;
 use std::io;
@@ -170,25 +169,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 // todo;; remove dupes in df, and this map goes away
                                 let seq = TSeq::make(trip.into_iter().map(|(_, g)| g).collect());
 
-                                let mut szout: usize = 0;
-                                unsafe {
-                                    let bytes = meos::temporal_as_wkb(
-                                        seq.p as *const Temporal,
-                                        meos::WKB_VARIANT,
-                                        &mut szout,
-                                    ) as *const u8;
-                                    let arr = std::slice::from_raw_parts(bytes, szout);
-
-                                    let client = pool.get().await?;
-                                    match client
-                                        .execute(&insert_statement, &[&(mmsi as i32), &arr])
-                                        .await
-                                    {
-                                        Ok(_) => {}
-                                        Err(e) => {
-                                            eprintln!("\nerror: {e}");
-                                            break 'df;
-                                        }
+                                let bytes = seq.as_bytes();
+                                let client = pool.get().await?;
+                                match client
+                                    .execute(&insert_statement, &[&(mmsi as i32), &bytes])
+                                    .await
+                                {
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        eprintln!("\nerror: {e}");
+                                        break 'df;
                                     }
                                 }
                             }
