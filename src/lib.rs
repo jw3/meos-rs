@@ -7,8 +7,6 @@ use std::fmt::{Display, Formatter};
 use std::ptr::null_mut;
 use std::str::Utf8Error;
 
-pub const WKB_VARIANT: u8 = 0u8 | WKB_NDR as u8 | WKB_EXTENDED as u8  /* | WKB_HEX*/;
-
 pub fn init() {
     unsafe {
         ffi::meos_initialize(null_mut(), None);
@@ -140,7 +138,7 @@ impl TSeq {
         let mut szout: usize = 0;
         unsafe {
             let bytes =
-                ffi::temporal_as_wkb(self.p as *const Temporal, crate::WKB_VARIANT, &mut szout)
+                ffi::temporal_as_wkb(self.p as *const Temporal, WKB_EXTENDED as u8, &mut szout)
                     as *const u8;
             std::slice::from_raw_parts(bytes, szout)
         }
