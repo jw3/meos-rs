@@ -1,11 +1,14 @@
 [package]
-name = "polars-example"
+name = "meos-polars"
 version = "0.1.0"
 edition = "2021"
 
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
 [dependencies]
-meos-rs = { path = "../.." }
-meos-sys = { path = "../../meos-sys" }
+
+[dev-dependencies]
+meos-rs = { path = "../meos" }
 clap = { version = "4", features = ["derive"] }
 polars = { version = "x", features = ["lazy", "strings", "concat_str", "regex"] }
 serde = { version = "1", features = ["derive"] }
