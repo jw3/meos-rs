@@ -1,5 +1,5 @@
-use ffi::{Temporal, WKB_EXTENDED, WKB_NDR};
-use libc::free;
+use ffi::{Temporal, WKB_EXTENDED};
+use libc::{c_char, free};
 use meos_sys as ffi;
 use std::error::Error;
 use std::ffi::{CStr, CString};
@@ -18,9 +18,10 @@ pub fn finalize() {
         ffi::meos_finalize();
     }
 }
-pub type TGeomPtr = *mut ffi::Temporal;
+
+type TGeomPtr = *mut ffi::Temporal;
 pub struct TGeom {
-    pub ptr: *mut ffi::Temporal,
+    pub ptr: TGeomPtr,
 }
 
 impl TGeom {
@@ -39,7 +40,7 @@ impl TGeom {
 
     pub fn make(lat: f64, lon: f64, t: String, srid: u32) -> Result<String, Box<dyn Error>> {
         unsafe {
-            let t_ptr = CString::new(t.clone())?;
+            let t_ptr = to_c_str(&t);
             let ts = ffi::pg_timestamp_in(t_ptr.as_ptr(), -1);
             let t_out = ffi::pg_timestamp_out(ts);
             let t_str = CString::from_raw(t_out);
@@ -110,7 +111,7 @@ pub struct TSeq {
 }
 
 impl TSeq {
-    pub fn make(gs: Vec<TGeom>) -> Self {
+    pub fn make(gs: &Vec<TGeom>) -> Self {
         let v: Vec<TGeomPtr> = gs.iter().map(|g| g.ptr).collect();
         let arr = v.as_slice();
         let p = unsafe {
@@ -141,6 +142,26 @@ impl TSeq {
                 ffi::temporal_as_wkb(self.p as *const Temporal, WKB_EXTENDED as u8, &mut szout)
                     as *const u8;
             std::slice::from_raw_parts(bytes, szout)
+        }
+    }
+
+    pub fn as_hex(&self) -> Option<String> {
+        let mut szout: usize = 0;
+        unsafe {
+            let bytes =
+                ffi::temporal_as_hexwkb(self.p as *const Temporal, WKB_EXTENDED as u8, &mut szout);
+            let r = c_str_to_slice(&(bytes as *const c_char)).map(|s| s.to_owned());
+            free(bytes.cast());
+            r
+        }
+    }
+
+    pub fn as_json(&self) -> Option<String> {
+        unsafe {
+            let bytes = ffi::temporal_as_mfjson(self.p as *const Temporal, true, 0, 6, null_mut());
+            let r = c_str_to_slice(&(bytes as *const c_char)).map(|s| s.to_owned());
+            free(bytes.cast());
+            r
         }
     }
 }
@@ -182,4 +203,16 @@ impl Display for TemporalSubtype {
             TSequenceSet => "SequenceSet",
         })
     }
+}
+
+fn c_str_to_slice(c: &*const c_char) -> Option<&str> {
+    if c.is_null() {
+        None
+    } else {
+        std::str::from_utf8(unsafe { CStr::from_ptr(*c).to_bytes() }).ok()
+    }
+}
+
+fn to_c_str(n: &str) -> CString {
+    CString::new(n.as_bytes()).unwrap()
 }
