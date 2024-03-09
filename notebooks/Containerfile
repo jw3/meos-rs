@@ -1,0 +1,24 @@
+FROM quay.io/jupyter/minimal-notebook:2024-02-26
+
+USER root
+
+RUN apt update \
+ && apt install -y cargo \
+ && apt clean
+
+RUN cargo install evcxr_jupyter \
+ && cp .cargo/bin/evcxr_jupyter /usr/local/bin \
+ && rm -rf .cargo
+
+RUN curl -L -o simple-http-server https://github.com/TheWaWaR/simple-http-server/releases/download/v0.6.9/x86_64-unknown-linux-musl-simple-http-server \
+ && chmod +x simple-http-server \
+ && mv simple-http-server /usr/local/bin
+
+RUN echo "simple-http-server -p 8889 --cors /home/jovyan/http &" > /usr/local/bin/before-notebook.d/20start-http-server.sh \
+ && chmod +x /usr/local/bin/before-notebook.d/20start-http-server.sh
+
+USER jovyan
+
+RUN mkdir http
+
+RUN evcxr_jupyter --install
