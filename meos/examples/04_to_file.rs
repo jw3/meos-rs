@@ -64,7 +64,7 @@ struct Opts {
 
     /// Filter out trips with less than this number posits
     #[clap(long, default_value = "1")]
-    min_trip_size: u32,
+    min_trip_size: usize,
 
     #[clap(short, long)]
     format: OutFmt,
@@ -96,9 +96,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         match trips.entry(rec.mmsi) {
             Entry::Occupied(mut trip) => {
                 let v = trip.get_mut();
+                if let Some(prev) = v.last() {
+                    if *prev >= posit {
+                        continue;
+                    }
+                }
                 if v.len() == opts.batch_size {
-                    print!("[{records_in}] {},", rec.mmsi);
-                    let seq = TSeq::make(v);
+                    let seq = TSeq::make(v).expect("tseq::make failed");
                     v.clear();
                     write_record(&output, rec.mmsi, seq, opts.format).expect("write rec");
                 }
@@ -110,11 +114,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    println!("Total vessels: {}", trips.len());
-    for (mmsi, trip) in trips {
+    for (&mmsi, trip) in trips.iter().filter(|(_, t)| t.len() >= opts.min_trip_size) {
+        print!("{},", trip.len());
         let seq = TSeq::make(&trip);
-        write_record(&output, mmsi, seq, opts.format).expect("write rec");
+        write_record(&output, mmsi, seq.expect("tseq::make failed"), opts.format)
+            .expect("write rec");
     }
+    println!("\nTotal vessels: {}", trips.len());
 
     meos::finalize();
 
@@ -126,7 +132,7 @@ fn write_record(mut file: &File, mmsi: i64, seq: TSeq, fmt: OutFmt) -> Result<()
         OutFmt::Hex => seq.as_hex().unwrap(),
         OutFmt::MfJson => seq.as_json().unwrap(),
     };
-    writeln!(file, "{},{}", mmsi, output)?;
+    writeln!(file, r#"{{"id":{mmsi},"json":{output}}}"#)?;
     Ok(())
 }
 
