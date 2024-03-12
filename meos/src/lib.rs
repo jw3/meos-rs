@@ -1,10 +1,11 @@
 use ffi::{Temporal, WKB_EXTENDED};
 use libc::{c_char, free};
 use meos_sys as ffi;
+use std::cmp::Ordering;
 use std::error::Error;
 use std::ffi::{CStr, CString};
 use std::fmt::{Display, Formatter};
-use std::ptr::null_mut;
+use std::ptr::{null_mut, NonNull};
 use std::str::Utf8Error;
 
 pub fn init() {
@@ -17,9 +18,11 @@ pub fn finalize() {
     unsafe {
         ffi::meos_finalize();
     }
+    eprintln!("finalized")
 }
 
-type TGeomPtr = *mut ffi::Temporal;
+type TGeomPtr = *mut Temporal;
+
 pub struct TGeom {
     pub ptr: TGeomPtr,
 }
@@ -58,7 +61,12 @@ impl TGeom {
         let mt: ffi::tempSubtype = unsafe { (*self.ptr).subtype.into() };
         TemporalSubtype::from(mt)
     }
+
+    pub fn start(&self) -> i64 {
+        unsafe { ffi::temporal_start_timestamptz(self.ptr.cast()) }
+    }
 }
+
 impl Drop for TGeom {
     fn drop(&mut self) {
         unsafe {
@@ -66,6 +74,24 @@ impl Drop for TGeom {
         }
     }
 }
+
+impl PartialOrd for TGeom {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.start().partial_cmp(&other.start())
+    }
+}
+impl Ord for TGeom {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.start().cmp(&other.start())
+    }
+}
+impl PartialEq for TGeom {
+    fn eq(&self, other: &Self) -> bool {
+        // todo;; could just compare the ptr.t
+        self.ttype() == other.ttype() && unsafe { ffi::temporal_eq(self.ptr, other.ptr) }
+    }
+}
+impl Eq for TGeom {}
 
 pub struct TPointBuf {
     lat: f64,
@@ -107,11 +133,11 @@ pub fn to_mf_json(t: &TGeom) -> Result<String, Box<dyn Error>> {
 }
 
 pub struct TSeq {
-    p: *mut ffi::TSequence,
+    p: NonNull<ffi::TSequence>,
 }
 
 impl TSeq {
-    pub fn make(gs: &Vec<TGeom>) -> Self {
+    pub fn make(gs: &Vec<TGeom>) -> Option<Self> {
         let v: Vec<TGeomPtr> = gs.iter().map(|g| g.ptr).collect();
         let arr = v.as_slice();
         let p = unsafe {
@@ -124,12 +150,12 @@ impl TSeq {
                 false,
             )
         };
-        TSeq { p }
+        NonNull::new(p).map(|p| TSeq { p })
     }
 
     pub fn out(&self) -> Result<String, Utf8Error> {
         unsafe {
-            let temp_out = ffi::tsequence_out(self.p, 15);
+            let temp_out = ffi::tsequence_out(self.p.as_ptr(), 15);
             let x = CString::from_raw(temp_out);
             x.to_str().map(|x| x.to_owned())
         }
@@ -138,9 +164,8 @@ impl TSeq {
     pub fn as_bytes(&self) -> &[u8] {
         let mut szout: usize = 0;
         unsafe {
-            let bytes =
-                ffi::temporal_as_wkb(self.p as *const Temporal, WKB_EXTENDED as u8, &mut szout)
-                    as *const u8;
+            let bytes = ffi::temporal_as_wkb(self.p.as_ptr().cast(), WKB_EXTENDED as u8, &mut szout)
+                as *const u8;
             std::slice::from_raw_parts(bytes, szout)
         }
     }
@@ -149,7 +174,7 @@ impl TSeq {
         let mut szout: usize = 0;
         unsafe {
             let bytes =
-                ffi::temporal_as_hexwkb(self.p as *const Temporal, WKB_EXTENDED as u8, &mut szout);
+                ffi::temporal_as_hexwkb(self.p.as_ptr().cast(), WKB_EXTENDED as u8, &mut szout);
             let r = c_str_to_slice(&(bytes as *const c_char)).map(|s| s.to_owned());
             free(bytes.cast());
             r
@@ -158,7 +183,7 @@ impl TSeq {
 
     pub fn as_json(&self) -> Option<String> {
         unsafe {
-            let bytes = ffi::temporal_as_mfjson(self.p as *const Temporal, true, 0, 6, null_mut());
+            let bytes = ffi::temporal_as_mfjson(self.p.as_ptr().cast(), false, 0, 6, null_mut());
             let r = c_str_to_slice(&(bytes as *const c_char)).map(|s| s.to_owned());
             free(bytes.cast());
             r
@@ -168,11 +193,11 @@ impl TSeq {
 
 impl Drop for TSeq {
     fn drop(&mut self) {
-        unsafe { free(self.p.cast()) }
+        unsafe { free(self.p.as_ptr().cast()) }
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 pub enum TemporalSubtype {
     TAny,
     TInstant,
