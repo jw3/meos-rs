@@ -19,6 +19,8 @@ struct AisRecord {
     latitude: f64,
     #[serde(alias = "LON")]
     longitude: f64,
+    #[serde(alias = "VesselType", default)]
+    vessel_type: Option<u32>,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -27,12 +29,6 @@ enum OutFmt {
     Hex,
     MfJson,
 }
-//
-// impl Display for OutFmt {
-//     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-//         f.write_fmt(format_args!("{:?}", self))
-//     }
-// }
 
 impl FromStr for OutFmt {
     type Err = String;
@@ -58,10 +54,6 @@ struct Opts {
     #[clap(short, long)]
     limit: Option<usize>,
 
-    /// Maximum number of posits per output record
-    #[clap(long, default_value = "50")]
-    batch_size: usize,
-
     /// Filter out trips with less than this number posits
     #[clap(long, default_value = "1")]
     min_trip_size: usize,
@@ -84,7 +76,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         .open(&opts.output)?;
 
     let mut trips: HashMap<i64, Vec<TGeom>> = HashMap::new();
-    for (records_in, result) in rdr
+    let mut vtype: HashMap<i64, u32> = HashMap::new();
+    for (_, result) in rdr
         .deserialize()
         .take(opts.limit.unwrap_or(usize::MAX))
         .enumerate()
@@ -93,6 +86,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let lon_lat = format!("{} {}", rec.longitude, rec.latitude);
         let posit = make_posit(&rec.t, &lon_lat);
+        vtype.insert(rec.mmsi, rec.vessel_type.unwrap_or(0));
         match trips.entry(rec.mmsi) {
             Entry::Occupied(mut trip) => {
                 let v = trip.get_mut();
@@ -101,11 +95,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                         continue;
                     }
                 }
-                if v.len() == opts.batch_size {
-                    let seq = TSeq::make(v).expect("tseq::make failed");
-                    v.clear();
-                    write_record(&output, rec.mmsi, seq, opts.format).expect("write rec");
-                }
+                // if v.len() == opts.batch_size {
+                //     let seq = TSeq::make(v).expect("tseq::make failed");
+                //     v.clear();
+                //     let vt = vtype.get(&rec.mmsi).unwrap_or(&0);
+                //     write_record(&output, rec.mmsi, *vt, seq, opts.format).expect("write rec");
+                // }
                 v.push(posit);
             }
             Entry::Vacant(trip) => {
@@ -117,8 +112,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     for (&mmsi, trip) in trips.iter().filter(|(_, t)| t.len() >= opts.min_trip_size) {
         print!("{},", trip.len());
         let seq = TSeq::make(&trip);
-        write_record(&output, mmsi, seq.expect("tseq::make failed"), opts.format)
-            .expect("write rec");
+        let vt = vtype.get(&mmsi).unwrap_or(&0);
+        write_record(
+            &output,
+            mmsi,
+            *vt,
+            seq.expect("tseq::make failed"),
+            opts.format,
+        )
+        .expect("write rec");
     }
     println!("\nTotal vessels: {}", trips.len());
 
@@ -127,12 +129,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn write_record(mut file: &File, mmsi: i64, seq: TSeq, fmt: OutFmt) -> Result<(), Box<dyn Error>> {
+fn write_record(
+    mut file: &File,
+    mmsi: i64,
+    vtype: u32,
+    seq: TSeq,
+    fmt: OutFmt,
+) -> Result<(), Box<dyn Error>> {
     let output = match fmt {
         OutFmt::Hex => seq.as_hex().unwrap(),
         OutFmt::MfJson => seq.as_json().unwrap(),
     };
-    writeln!(file, r#"{{"id":{mmsi},"json":{output}}}"#)?;
+    writeln!(file, r#"{{"id":{mmsi},"vt":{vtype},"json":{output}}}"#)?;
     Ok(())
 }
 

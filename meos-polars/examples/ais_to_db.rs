@@ -5,6 +5,7 @@ use polars::prelude::*;
 use std::error::Error;
 use std::io;
 use std::io::Write;
+use std::path::PathBuf;
 use std::time::Instant;
 use tokio_postgres::{Client, NoTls};
 
@@ -31,7 +32,9 @@ async fn create_trip_table(client: &Client) -> Result<(), tokio_postgres::Error>
 /// - `+` represents 10,000 posits processed
 #[derive(Clone, Debug, Parser)]
 struct Opts {
-    /// Path to the input CSV file
+    /// Path to the input CSV
+    /// May be a single file or a directory
+    /// If is a directory then all csv are globbed
     csv: String,
 
     /// Database name
@@ -94,8 +97,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     });
 
+    let input = PathBuf::from(&opts.csv);
+    let data = if input.is_file() {
+        vec![input]
+    } else if input.is_dir() {
+        print!("searching dir {} for csv... ", opts.csv);
+        let mut res = vec![];
+        for f in std::fs::read_dir(input)?.flatten().map(|e| e.path()) {
+            if f.is_file() && f.extension().expect("extension").to_str().expect("str") == "csv" {
+                res.push(f);
+            }
+        }
+        println!("found {}", res.len());
+        res
+    } else {
+        unreachable!("input was not a file or dir")
+    };
+
     let start = Instant::now();
-    let df = LazyCsvReader::new(&opts.csv).has_header(true).finish()?;
+    let df = LazyCsvReader::new_paths(data.into())
+        .has_header(true)
+        .finish()?;
     let full_size = df.clone().collect().unwrap().height();
 
     let df = df
@@ -121,7 +143,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let sz = df.height();
     println!(
-        "loaded {} of {} records from {} in {:?}",
+        "{}: aggregated {} records over {} csv rows taking {:?}",
         sz, full_size, &opts.csv, duration
     );
     let start = Instant::now();
@@ -173,7 +195,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                             if !trip.is_empty() {
                                 // todo;; remove dupes in df, and this map goes away
-                                let seq = TSeq::make(trip.into_iter().map(|(_, g)| g).collect());
+                                let geoms: Vec<_> = trip.into_iter().map(|(_, g)| g).collect();
+                                let seq = TSeq::make(&geoms).unwrap();
 
                                 let bytes = seq.as_bytes();
                                 let client = pool.get().await?;
