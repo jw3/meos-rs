@@ -1,27 +1,21 @@
-use crate::{c_str_to_slice, TPtrCtr, Type};
+use crate::{c_str_to_slice, try_cstr_to_str, TPtrCtr, Type};
 use libc::{c_char, free};
 use meos_sys as ffi;
 use meos_sys::WKB_EXTENDED;
-use std::error::Error;
-use std::ffi::{CStr, CString};
+
+use crate::error::Error;
 use std::ptr::null_mut;
 
 #[allow(private_bounds)]
 pub trait Temporal: TPtrCtr {
-    fn from_wkt(wkt: &str) -> Result<Self, ()>
+    fn from_wkt(wkt: &str) -> Result<Self, Error>
     where
         Self: Sized;
 
     fn ttype(&self) -> Type;
 
-    fn to_mf_json(&self) -> Result<String, Box<dyn Error>> {
-        unsafe {
-            let p = ffi::temporal_as_mfjson(self.ptr(), true, 0, 6, null_mut());
-            let cstr = CStr::from_ptr(p);
-            let cstring = CString::new(cstr.to_bytes())?.into_string()?;
-            free(p.cast());
-            Ok(cstring)
-        }
+    fn to_mf_json(&self) -> Result<String, Error> {
+        unsafe { try_cstr_to_str(ffi::temporal_as_mfjson(self.ptr(), true, 0, 6, null_mut())) }
     }
 
     fn as_bytes(&self) -> &[u8] {

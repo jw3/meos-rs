@@ -1,10 +1,12 @@
+use crate::error::Error;
+use crate::error::Error::{MeosError, WrongTemporalType};
 use crate::temp::Temporal;
-use crate::{TPtrCtr, Type};
+use crate::{to_c_str, TPtrCtr, Type};
 use libc::free;
 use meos_sys as ffi;
 use std::cmp::Ordering;
-use std::ffi::CString;
 use std::ptr::NonNull;
+
 #[derive(Eq)]
 pub struct TInst {
     ptr: NonNull<ffi::TInstant>,
@@ -16,12 +18,13 @@ impl TPtrCtr for TInst {
     }
 }
 impl Temporal for TInst {
-    fn from_wkt(wkt: &str) -> Result<Self, ()> {
+    fn from_wkt(wkt: &str) -> Result<Self, Error> {
         unsafe {
-            let cstr = CString::new(wkt).map_err(|_| ())?;
+            let cstr = to_c_str(wkt)?;
             let ptr = ffi::tgeompoint_in(cstr.as_ptr());
             if ptr.is_null() {
-                return Err(());
+                // todo;; check the meos error
+                return Err(MeosError(-999));
             }
             let t = Self {
                 ptr: NonNull::new(ptr).unwrap().cast(),
@@ -29,7 +32,7 @@ impl Temporal for TInst {
             if (*t.ptr.as_ptr()).subtype == ffi::tempSubtype_TINSTANT as u8 {
                 Ok(t)
             } else {
-                return Err(());
+                return Err(WrongTemporalType);
             }
         }
     }

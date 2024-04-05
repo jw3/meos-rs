@@ -6,7 +6,7 @@ use std::io::Write;
 use std::str::FromStr;
 
 use clap::Parser;
-use meos::temp::{TInst, TSeq, Temporal};
+use meos::prelude::*;
 
 #[derive(Debug, serde::Deserialize)]
 struct AisRecord {
