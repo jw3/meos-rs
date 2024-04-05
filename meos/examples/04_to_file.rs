@@ -6,8 +6,7 @@ use std::io::Write;
 use std::str::FromStr;
 
 use clap::Parser;
-
-use meos::{TGeom, TSeq};
+use meos::tgeo::{TInst, TSeq, Temporal};
 
 #[derive(Debug, serde::Deserialize)]
 struct AisRecord {
@@ -75,7 +74,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .write(true)
         .open(&opts.output)?;
 
-    let mut trips: HashMap<i64, Vec<TGeom>> = HashMap::new();
+    let mut trips: HashMap<i64, Vec<TInst>> = HashMap::new();
     let mut vtype: HashMap<i64, u32> = HashMap::new();
     for (_, result) in rdr
         .deserialize()
@@ -144,7 +143,6 @@ fn write_record(
     Ok(())
 }
 
-fn make_posit(t: &str, p: &str) -> TGeom {
-    let wkt = format!("SRID=4326;Point({p})@{t}+00");
-    TGeom::new(&wkt).expect("")
+fn make_posit(t: &str, p: &str) -> TInst {
+    TInst::from_wkt(&format!("SRID=4326;Point({p})@{t}+00")).expect("posit")
 }

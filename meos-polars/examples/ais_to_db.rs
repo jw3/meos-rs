@@ -1,5 +1,6 @@
 use clap::Parser;
 use deadpool_postgres::{Config, ManagerConfig, RecyclingMethod, Runtime};
+use meos::tgeo::{TInst, TSeq, Temporal};
 use meos::*;
 use polars::prelude::*;
 use std::error::Error;
@@ -243,7 +244,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn make_posit(t: &str, p: &str) -> TGeom {
-    let wkt = format!("SRID=4326;Point({p})@{t}+00");
-    TGeom::new(&wkt).expect("")
+fn make_posit(t: &str, p: &str) -> TInst {
+    TInst::from_wkt(&format!("SRID=4326;Point({p})@{t}+00")).expect("")
 }
