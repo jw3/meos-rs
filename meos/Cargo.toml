@@ -10,6 +10,7 @@ name = "meos"
 [dependencies]
 libc = "0.2.153"
 meos-sys = { path = "../meos-sys" }
+thiserror = "1"
 
 [dev-dependencies]
 csv = "1"

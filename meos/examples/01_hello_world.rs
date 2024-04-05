@@ -1,4 +1,4 @@
-use meos::tgeo::{TInst, TSeq, TSet, Temporal};
+use meos::temp::{TInst, TSeq, TSet, Temporal};
 use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {

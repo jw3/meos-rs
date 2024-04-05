@@ -1,7 +1,6 @@
 use clap::Parser;
 use deadpool_postgres::{Config, ManagerConfig, RecyclingMethod, Runtime};
-use meos::tgeo::{TInst, TSeq, Temporal};
-use meos::*;
+use meos::prelude::*;
 use polars::prelude::*;
 use std::error::Error;
 use std::io;
