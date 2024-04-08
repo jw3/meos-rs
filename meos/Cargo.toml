@@ -19,3 +19,4 @@ tokio = { version = "1", features = ["full"] }
 tokio-postgres = "0.7"
 deadpool-postgres = "0.12"
 clap = { version = "4", features = ["derive"] }
+ctor = "0.2"
