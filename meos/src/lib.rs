@@ -12,6 +12,7 @@ mod error;
 pub mod prelude;
 pub mod set;
 pub mod span;
+pub mod stbox;
 pub mod tbox;
 mod temp;
 mod tinst;

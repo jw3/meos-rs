@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::fmt::{Debug, Formatter, Write};
+use std::fmt::{Debug, Formatter};
 use std::ptr::NonNull;
 
 use libc::free;
@@ -10,9 +10,9 @@ use meos_sys::{
     tbox_out,
 };
 
-use crate::{to_c_str, try_cstr_to_str};
 use crate::error::Error;
 use crate::error::Error::MeosError;
+use crate::{to_c_str, try_cstr_to_str};
 
 // todo;; TBox trait?
 
@@ -110,22 +110,10 @@ impl TBox {
     }
 }
 
-pub struct STBox {
-    ptr: NonNull<ffi::TBox>,
-}
-
-impl Drop for STBox {
-    fn drop(&mut self) {
-        unsafe {
-            free(self.ptr.as_ptr().cast());
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::{finalize, init};
     use crate::tbox::TBox;
+    use crate::{finalize, init};
 
     #[cfg(test)]
     #[ctor::ctor]
