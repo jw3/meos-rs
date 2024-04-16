@@ -1,9 +1,7 @@
-use std::env;
-
 fn main() {
-    let project_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-
-    println!("cargo:rustc-link-search={project_dir}/mobdb/lib");
+    // use std::env;
+    // let project_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    println!("cargo:rustc-link-search=/usr/local/lib");
     println!("cargo:rustc-link-lib=static=meos");
     println!("cargo:rustc-link-lib=dylib=json-c");
     println!("cargo:rustc-link-lib=dylib=proj");
@@ -17,7 +15,7 @@ fn main() {
 
     let bindings = bindgen::Builder::default()
         .header("wrapper.h")
-        .blocklist_file("mobdb/include/meos_internal.h")
+        .blocklist_file("meos_internal.h")
         .generate()
         .expect("Unable to generate bindings");
 

@@ -13,7 +13,7 @@ mobdb_build_dir="${mobdb_dir}/build"
 mkdir -p "${mobdb_dir}"
 
 if [[ ! -d ${mobdb_src_dir} ]]; then
-  git clone --depth=1 --branch v1.1.0rc2 https://github.com/MobilityDB/MobilityDB.git "${mobdb_src_dir}"
+  git clone --depth=1 --branch v1.1.0 https://github.com/MobilityDB/MobilityDB.git "${mobdb_src_dir}"
 fi
 
 if [[ ! -f ${mobdb_dir}/lib/libmeos.a ]]; then
@@ -27,7 +27,7 @@ if [[ ! -f ${mobdb_dir}/lib/libmeos.a ]]; then
         -DPOSTGRESQL_BIN="${pgbin_dir}" \
         -DCMAKE_C_COMPILER=/usr/bin/clang \
         -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
-        -DCMAKE_INSTALL_PREFIX="${mobdb_dir}" \
+        -DCMAKE_INSTALL_PREFIX="/usr/local" \
         "${mobdb_src_dir}"
 
   cd "${mobdb_build_dir}"/meos || exit 1
